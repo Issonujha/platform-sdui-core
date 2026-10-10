@@ -1,0 +1,31 @@
+{
+  "name": "@dukaandaar/sdui-core",
+  "version": "0.1.0",
+  "description": "Universal SDUI contracts, tree/reorder algorithms and headless hooks (zero UI, zero network).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "echo \"no tests yet\" && exit 0"
+  },
+  "peerDependencies": {
+    "react": ">=17"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "typescript": "^5.5.4"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

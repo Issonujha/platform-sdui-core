@@ -1,0 +1,4 @@
+packages:
+  - 'packages/sdui-core'
+  - 'packages/sdui-web'
+  - 'packages/sdui-mobile'
