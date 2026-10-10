@@ -1,6 +1,6 @@
 import React from 'react';
 import { Modal, ScrollView, Text, TouchableOpacity, View } from 'react-native';
-import type { FilterDef } from '@dukaandaar/sdui-core';
+import type { FilterDef } from '@issonujha/sdui-core';
 
 export interface FilterBottomSheetProps {
   visible: boolean;

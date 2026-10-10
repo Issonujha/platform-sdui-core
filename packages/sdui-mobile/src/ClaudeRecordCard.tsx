@@ -1,6 +1,6 @@
 import React from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
-import type { ColumnDef } from '@dukaandaar/sdui-core';
+import type { ColumnDef } from '@issonujha/sdui-core';
 
 export interface ClaudeRecordCardProps<T> {
   item: T;

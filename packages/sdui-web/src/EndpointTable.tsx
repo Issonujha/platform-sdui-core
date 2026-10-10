@@ -1,5 +1,5 @@
 import React from 'react';
-import type { DataTableResponse } from '@dukaandaar/sdui-core';
+import type { DataTableResponse } from '@issonujha/sdui-core';
 import { DynamicTable } from './DynamicTable';
 import { useSdui } from './SduiWebProvider';
 

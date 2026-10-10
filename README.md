@@ -2,9 +2,9 @@
 
 Option C layered monorepo for the Dukaandaar platform SDUI commons.
 
-- **`@dukaandaar/sdui-core`** — pure TypeScript contracts, tree/reorder algorithms, headless hooks. Zero UI, zero network.
-- **`@dukaandaar/sdui-web`** — React web components. Data-in/callback-out; the only I/O is the host-injected `fetcher`.
-- **`@dukaandaar/sdui-mobile`** — React Native / Expo components. Same zero-network rule.
+- **`@issonujha/sdui-core`** — pure TypeScript contracts, tree/reorder algorithms, headless hooks. Zero UI, zero network.
+- **`@issonujha/sdui-web`** — React web components. Data-in/callback-out; the only I/O is the host-injected `fetcher`.
+- **`@issonujha/sdui-mobile`** — React Native / Expo components. Same zero-network rule.
 - **`sdui-spring-boot-starter`** — Java 17 contracts, `DataTableBuilder`, hierarchy/reorder engines, archetypes.
 
 ## Core mandate: zero embedded networking
@@ -17,9 +17,9 @@ executed by the host application (`rn-backend`, `rn-frontend`, `rn-mobile`, `sca
 ```
 platform-sdui-core/
 ├── packages/
-│   ├── sdui-core/                # @dukaandaar/sdui-core
-│   ├── sdui-web/                 # @dukaandaar/sdui-web
-│   ├── sdui-mobile/              # @dukaandaar/sdui-mobile
+│   ├── sdui-core/                # @issonujha/sdui-core
+│   ├── sdui-web/                 # @issonujha/sdui-web
+│   ├── sdui-mobile/              # @issonujha/sdui-mobile
 │   └── sdui-spring-boot-starter/ # Maven (NOT a pnpm workspace member)
 ├── .github/workflows/            # release-npm.yml, release-maven.yml
 └── pnpm-workspace.yaml

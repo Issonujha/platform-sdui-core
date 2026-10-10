@@ -1,10 +1,10 @@
 import React from 'react';
-import type { NavigationItem } from '@dukaandaar/sdui-core';
-import { filterNavByRoles } from '@dukaandaar/sdui-core';
+import type { NavigationItem } from '@issonujha/sdui-core';
+import { filterNavByRoles } from '@issonujha/sdui-core';
 import { useSdui } from './SduiWebProvider';
 
 export interface NavBarProps {
-  items: import('@dukaandaar/sdui-core').NavigationItem[];
+  items: import('@issonujha/sdui-core').NavigationItem[];
   onNavigate?: (item: { route: string }) => void;
   activeRoute?: string;
   title?: string;

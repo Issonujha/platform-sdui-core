@@ -1,6 +1,6 @@
 import React from 'react';
 import { FlatList, RefreshControl, Text, View } from 'react-native';
-import type { DataTableResponse } from '@dukaandaar/sdui-core';
+import type { DataTableResponse } from '@issonujha/sdui-core';
 import { ClaudeRecordCard } from './ClaudeRecordCard';
 
 export interface DynamicRecordsListProps<T> {
@@ -37,8 +37,8 @@ export function DynamicRecordsList<T extends { id?: string }>({
       ) : null}
       <FlatList
         data={items}
-        keyExtractor={(item, index) => String(item.id ?? index)}
-        renderItem={({ item }) => (
+        keyExtractor={(item: any, index: number) => String(item?.id ?? index)}
+        renderItem={({ item }: { item: any }) => (
           <ClaudeRecordCard
             item={item}
             onPress={onCardPress ? () => onCardPress(item) : undefined}

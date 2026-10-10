@@ -1,5 +1,5 @@
 {
-  "name": "@dukaandaar/sdui-core",
+  "name": "@issonujha/sdui-core",
   "version": "0.1.0",
   "description": "Universal SDUI contracts, tree/reorder algorithms and headless hooks (zero UI, zero network).",
   "type": "module",

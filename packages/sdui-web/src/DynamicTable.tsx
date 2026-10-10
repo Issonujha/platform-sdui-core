@@ -1,5 +1,5 @@
 import React from 'react';
-import type { ColumnDef, DataTableResponse, FilterDef } from '@dukaandaar/sdui-core';
+import type { ColumnDef, DataTableResponse, FilterDef } from '@issonujha/sdui-core';
 
 export interface DynamicTableProps<T> {
   data: DataTableResponse<T>;
