@@ -1,7 +1,7 @@
 import React from 'react';
 import type { NavigationItem } from '@issonujha/sdui-core';
 import { filterNavByRoles } from '@issonujha/sdui-core';
-import { useSdui } from './SduiWebProvider';
+import { useSdui } from './SduiWebProvider.js';
 
 export interface NavBarProps {
   items: import('@issonujha/sdui-core').NavigationItem[];

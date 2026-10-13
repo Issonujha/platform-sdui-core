@@ -1,6 +1,6 @@
 {
   "name": "@issonujha/sdui-core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Universal SDUI contracts, tree/reorder algorithms and headless hooks (zero UI, zero network).",
   "type": "module",
   "main": "./dist/index.js",

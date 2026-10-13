@@ -1,7 +1,7 @@
 import React from 'react';
 import type { DataTableResponse } from '@issonujha/sdui-core';
-import { DynamicTable } from './DynamicTable';
-import { useSdui } from './SduiWebProvider';
+import { DynamicTable } from './DynamicTable.js';
+import { useSdui } from './SduiWebProvider.js';
 
 /**
  * Convenience wrapper: owns pagination/sort/filter state but delegates the actual

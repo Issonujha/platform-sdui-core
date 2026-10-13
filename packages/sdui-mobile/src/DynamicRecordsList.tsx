@@ -1,7 +1,7 @@
 import React from 'react';
 import { FlatList, RefreshControl, Text, View } from 'react-native';
 import type { DataTableResponse } from '@issonujha/sdui-core';
-import { ClaudeRecordCard } from './ClaudeRecordCard';
+import { ClaudeRecordCard } from './ClaudeRecordCard.js';
 
 export interface DynamicRecordsListProps<T> {
   data: DataTableResponse<T>;

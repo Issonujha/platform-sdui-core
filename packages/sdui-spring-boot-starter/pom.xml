@@ -13,7 +13,7 @@
 
     <groupId>com.dukaandaar</groupId>
     <artifactId>sdui-spring-boot-starter</artifactId>
-    <version>0.1.1</version>
+    <version>0.1.2</version>
     <packaging>jar</packaging>
     <name>sdui-spring-boot-starter</name>
     <description>Server-Side UI commons: metadata-driven table contracts, hierarchy and reorder engines.</description>

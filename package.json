@@ -1,6 +1,6 @@
 {
   "name": "platform-sdui-core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Dukaandaar platform SDUI commons (Option C layered monorepo)",
   "packageManager": "pnpm@9.0.0",

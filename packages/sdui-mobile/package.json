@@ -1,6 +1,6 @@
 {
   "name": "@issonujha/sdui-mobile",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "React Native / Expo SDUI components (data-in/callback-out; no network of its own).",
   "type": "module",
   "main": "./dist/index.js",
