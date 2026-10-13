@@ -1,6 +1,6 @@
 {
   "name": "@issonujha/sdui-web",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "React web SDUI components (data-in/callback-out; network only via host fetcher).",
   "type": "module",
   "main": "./dist/index.js",

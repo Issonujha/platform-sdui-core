@@ -352,7 +352,8 @@ export function DynamicTable<T = any>({
 
         {/* Dynamic Filters */}
         {filters.map((filter) => {
-          if (filter.type === 'SELECT' || filter.type === 'MULTI_SELECT') {
+          const fType = String(filter.type || '').toUpperCase();
+          if (fType === 'SELECT' || fType === 'MULTI_SELECT') {
             return (
               <select
                 key={filter.key}
