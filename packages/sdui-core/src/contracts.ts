@@ -81,6 +81,7 @@ export interface DataTableResponse<T> {
   sortBy?: string;
   sortDir?: 'asc' | 'desc' | 'ASC' | 'DESC';
   summary?: Record<string, unknown>;
+  stages?: KanbanStageDef[];
   enableLiveReload?: boolean;
   defaultLiveReload?: number;
   enableExport?: boolean;
@@ -121,3 +122,23 @@ export interface PlatformFilter {
   entityKey?: string;
   multiple?: boolean;
 }
+
+export type TableViewMode = 'table' | 'kanban' | 'cards' | 'list';
+
+export interface KanbanStageDef {
+  key: string;
+  label: string;
+  color?: string;
+  textColor?: string;
+  borderColor?: string;
+  statuses?: string[];
+}
+
+export interface StageTransitionOption {
+  id: string;
+  name: string;
+  code: string;
+  requiresOtp?: boolean;
+  primary?: boolean;
+}
+

@@ -74,4 +74,22 @@ class DataTableContractTest {
         assertEquals("ASC", request.sortDir());
         assertEquals("tea", request.filterString("status") == null ? null : request.search().trim());
     }
+
+    @Test
+    void stagesSerializesInResponse() throws Exception {
+        StageDefinition stage = new StageDefinition("PACKED", "Packed", "orange", null, null, List.of("PACKED", "PREPARING"));
+        DataTableResponse<String> response = new DataTableResponse<>(
+                List.of("order-1"), 1, 1, 0, 10, true,
+                List.of(), List.of(), null, null, Map.of(),
+                List.of(stage),
+                true, 0, true, true);
+
+        Map<String, Object> json = json(response);
+        assertTrue(json.containsKey("stages"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> stages = (List<Map<String, Object>>) json.get("stages");
+        assertEquals(1, stages.size());
+        assertEquals("PACKED", stages.get(0).get("key"));
+        assertEquals("orange", stages.get(0).get("color"));
+    }
 }

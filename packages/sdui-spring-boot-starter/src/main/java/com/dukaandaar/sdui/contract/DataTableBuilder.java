@@ -19,6 +19,7 @@ public final class DataTableBuilder<T> {
 
     private final List<ColumnDefinition> columns = new ArrayList<>();
     private final List<FilterDefinition> filters = new ArrayList<>();
+    private final List<StageDefinition> stages = new ArrayList<>();
     private String defaultSortBy = "createdAt";
     private String defaultSortDir = "DESC";
     private Map<String, Object> summary;
@@ -106,6 +107,25 @@ public final class DataTableBuilder<T> {
         return this;
     }
 
+    public DataTableBuilder<T> addStage(StageDefinition stage) {
+        if (stage != null) {
+            stages.add(stage);
+        }
+        return this;
+    }
+
+    public DataTableBuilder<T> addStage(String key, String label, String color) {
+        return addStage(new StageDefinition(key, label, color));
+    }
+
+    public DataTableBuilder<T> stages(List<StageDefinition> stages) {
+        this.stages.clear();
+        if (stages != null) {
+            this.stages.addAll(stages);
+        }
+        return this;
+    }
+
     /** Terminal for the fluent path: maps the page and attaches the accumulated schema. */
     public <S> DataTableResponse<T> page(Page<S> page, java.util.function.Function<S, T> mapper) {
         DataTableResponse<T> base = fromPage(page, mapper, List.copyOf(columns), List.copyOf(filters));
@@ -121,6 +141,7 @@ public final class DataTableBuilder<T> {
                 defaultSortBy,
                 defaultSortDir,
                 summary,
+                List.copyOf(stages),
                 enableLiveReload,
                 defaultLiveReload,
                 enableExport,
