@@ -1,20 +1,22 @@
 {
   "name": "@issonujha/sdui-web",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "React web SDUI components (data-in/callback-out; network only via host fetcher).",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
     }
   },
   "files": ["dist"],
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "rm -rf dist && tsc -p tsconfig.json && tsc -p tsconfig.cjs.json && node -e \"require('fs').writeFileSync('dist/cjs/package.json', JSON.stringify({type: 'commonjs'}))\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "echo \"no tests yet\" && exit 0"
   },
