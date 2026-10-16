@@ -1,6 +1,9 @@
 declare module 'react-native' {
   import React from 'react';
 
+  export type ViewStyle = any;
+  export type TextStyle = any;
+
   export interface ViewProps {
     style?: any;
     children?: React.ReactNode;
