@@ -19,7 +19,11 @@ jobs:
           server-id: github
           server-username: GITHUB_ACTOR
           server-password: GITHUB_TOKEN
-      - run: mvn -B deploy -Drevision=${{ github.ref_name }} -f packages/sdui-spring-boot-starter/pom.xml
+      - name: Publish Maven Starter to GitHub Packages
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Deploying Maven Starter version: ${VERSION}"
+          mvn -B deploy -Drevision="${VERSION}" -f packages/sdui-spring-boot-starter/pom.xml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
