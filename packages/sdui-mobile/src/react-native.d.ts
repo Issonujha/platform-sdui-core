@@ -69,4 +69,31 @@ declare module 'react-native' {
     [key: string]: any;
   }
   export const Modal: React.FC<ModalProps>;
+
+  export interface TextInputProps {
+    style?: any;
+    placeholder?: string;
+    placeholderTextColor?: string;
+    value?: string;
+    onChangeText?: (text: string) => void;
+    [key: string]: any;
+  }
+  export const TextInput: React.FC<TextInputProps>;
+
+  export interface SwitchProps {
+    value?: boolean;
+    onValueChange?: (value: boolean) => void;
+    trackColor?: any;
+    thumbColor?: string;
+    [key: string]: any;
+  }
+  export const Switch: React.FC<SwitchProps>;
+
+  export const StyleSheet: {
+    create: <T extends Record<string, any>>(styles: T) => T;
+  };
+
+  export const Share: {
+    share: (content: { title?: string; message: string; url?: string }, options?: any) => Promise<any>;
+  };
 }
