@@ -48,6 +48,8 @@ export interface DynamicTableProps<T = any> {
   searchValue?: string;
   onRowClick?: (row: T) => void;
   onExportCsv?: () => void;
+  onExport?: (format: 'csv' | 'excel' | 'json' | 'print') => void;
+  exportFormats?: Array<'csv' | 'excel' | 'json' | 'print'>;
   onRefresh?: () => void;
   title?: string;
   subtitle?: string;
@@ -60,6 +62,7 @@ export interface DynamicTableProps<T = any> {
   activeFilters?: Record<string, unknown>;
   emptyMessage?: string;
   exportFilename?: string;
+  exportEndpoint?: string;
   tableActions?: React.ReactNode | TableActionItem[];
   extraHeaderActions?: React.ReactNode;
   compact?: boolean;
@@ -152,6 +155,8 @@ export function DynamicTable<T = any>({
   searchValue: controlledSearchValue,
   onRowClick,
   onExportCsv,
+  onExport,
+  exportFormats = ['csv', 'excel', 'json', 'print'],
   onRefresh,
   title,
   subtitle,
@@ -164,6 +169,7 @@ export function DynamicTable<T = any>({
   activeFilters,
   emptyMessage,
   exportFilename,
+  exportEndpoint,
   tableActions,
   extraHeaderActions,
   compact = false,
@@ -239,6 +245,25 @@ export function DynamicTable<T = any>({
   // Sorting state (client-side + parent notification)
   const [internalSortBy, setInternalSortBy] = useState<string | undefined>(normalizedData.sortBy);
   const [internalSortDir, setInternalSortDir] = useState<'asc' | 'desc'>((normalizedData.sortDir as 'asc' | 'desc') || 'asc');
+
+  // Export Dropdown & Notification State
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    }
+    if (exportMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [exportMenuOpen]);
 
   const activeSortBy = internalSortBy !== undefined ? internalSortBy : normalizedData.sortBy;
   const activeSortDir = internalSortDir || (normalizedData.sortDir as 'asc' | 'desc') || 'asc';
@@ -495,33 +520,200 @@ export function DynamicTable<T = any>({
     setDraggedItem(null);
   };
 
-  // Export CSV
-  const handleExport = () => {
-    if (onExportCsv) {
-      onExportCsv();
-      return;
+  // Dynamic cell value resolver using column key, nested dot-paths (e.g. 'shop.name'), or custom accessor
+  const getCellValue = useCallback((row: any, col: ColumnDef<T>): any => {
+    if (!row || !col) return '';
+    if (typeof (col as any).accessor === 'function') {
+      try {
+        return (col as any).accessor(row);
+      } catch {
+        // fallback
+      }
     }
-    if (!processedContent || processedContent.length === 0) return;
-    const headers = visibleColumns.map((c) => c.label || (c as any).header || c.key);
-    const rows = processedContent.map((row) =>
-      visibleColumns.map((c) => {
-        const v = typeof (c as any).accessor === 'function'
-          ? (c as any).accessor(row)
-          : (row as any)[c.key];
-        return typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
-      })
-    );
-    const csvContent =
-      'data:text/csv;charset=utf-8,' +
-      [headers.join(','), ...rows.map((r) => r.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const key = col.key;
+    if (!key) return '';
+    if (key.includes('.')) {
+      return key.split('.').reduce((acc, part) => (acc ? acc[part] : undefined), row);
+    }
+    return row[key];
+  }, []);
+
+  // Helper to extract clean display/export string from row & column dynamically
+  const getExportCellValue = useCallback((row: any, col: ColumnDef<T>): string => {
+    const v = getCellValue(row, col);
+    if (v === undefined || v === null) return '';
+    if (typeof v === 'object') {
+      if (Array.isArray(v)) {
+        return v.map((item) => (typeof item === 'object' ? JSON.stringify(item) : String(item))).join('; ');
+      }
+      return JSON.stringify(v);
+    }
+    return String(v);
+  }, [getCellValue]);
+
+  const triggerDownload = useCallback((blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `${exportFilename || title || 'export'}_${Date.now()}.csv`);
+    link.href = url;
+    link.setAttribute('download', filename);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  };
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 1000);
+  }, []);
+
+  // Multi-Format Export across CSV, Excel (.xls), JSON, and Print/PDF
+  const handleExport = useCallback((format: 'csv' | 'excel' | 'json' | 'print' = 'csv') => {
+    if (onExport) {
+      onExport(format);
+      return;
+    }
+    if (format === 'csv' && onExportCsv) {
+      onExportCsv();
+      return;
+    }
+
+    if (exportEndpoint) {
+      const q = activeSearch ? `&search=${encodeURIComponent(activeSearch)}` : '';
+      const url = `${exportEndpoint}${exportEndpoint.includes('?') ? '&' : '?'}format=${format}${q}`;
+      window.open(url, '_blank');
+      setExportNotice(`Exporting ${format.toUpperCase()} from server…`);
+      setTimeout(() => setExportNotice(null), 3000);
+      return;
+    }
+
+    const rowsData = Array.isArray(processedContent) ? processedContent : [];
+    const count = rowsData.length;
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    const fileNameBase = `${exportFilename || (title ? title.toLowerCase().replace(/[^a-z0-9]+/g, '_') : 'export')}_${dateStamp}`;
+
+    if (count === 0) {
+      setExportNotice('Exported column headers template (0 records found)');
+      setTimeout(() => setExportNotice(null), 4000);
+    } else {
+      setExportNotice(`Exported ${count} record${count === 1 ? '' : 's'} as ${format.toUpperCase()}`);
+      setTimeout(() => setExportNotice(null), 3000);
+    }
+
+    // 1. CSV Format
+    if (format === 'csv') {
+      const headers = visibleColumns.map((c) => c.label || (c as any).header || c.key);
+      const rows = rowsData.map((row) =>
+        visibleColumns.map((c) => {
+          const val = getExportCellValue(row, c);
+          if (val.includes(',') || val.includes('"') || val.includes('\n') || val.includes('\r')) {
+            return `"${val.replace(/"/g, '""')}"`;
+          }
+          return val;
+        })
+      );
+      const csvString = [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+      const blob = new Blob([`\uFEFF${csvString}`], { type: 'text/csv;charset=utf-8;' });
+      triggerDownload(blob, `${fileNameBase}.csv`);
+      return;
+    }
+
+    // 2. Excel Format (.xls)
+    if (format === 'excel') {
+      const escapeXml = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+      const headersHtml = visibleColumns.map((c) => `<th style="background:#F1F5F9;color:#0F172A;font-weight:bold;border:1px solid #CBD5E1;padding:8px 12px;text-align:left;">${escapeXml(c.label || (c as any).header || c.key)}</th>`).join('');
+      const rowsHtml = rowsData.map((row) =>
+        `<tr>${visibleColumns.map((c) => `<td style="border:1px solid #E2E8F0;padding:6px 12px;">${escapeXml(getExportCellValue(row, c))}</td>`).join('')}</tr>`
+      ).join('');
+      const excelHtml = `
+        <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+          <head>
+            <!--[if gte mso 9]>
+            <xml>
+              <x:ExcelWorkbook>
+                <x:ExcelWorksheets>
+                  <x:ExcelWorksheet>
+                    <x:Name>${escapeXml(title || 'Records')}</x:Name>
+                    <x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+                  </x:ExcelWorksheet>
+                </x:ExcelWorksheets>
+              </x:ExcelWorkbook>
+            </xml>
+            <![endif]-->
+            <meta http-equiv="content-type" content="application/vnd.ms-excel; charset=UTF-8"/>
+          </head>
+          <body>
+            <table>
+              <thead><tr>${headersHtml}</tr></thead>
+              <tbody>${rowsHtml}</tbody>
+            </table>
+          </body>
+        </html>
+      `.trim();
+      const blob = new Blob([excelHtml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+      triggerDownload(blob, `${fileNameBase}.xls`);
+      return;
+    }
+
+    // 3. JSON Format (.json)
+    if (format === 'json') {
+      const exportJson = rowsData.map((row) => {
+        const item: Record<string, unknown> = {};
+        visibleColumns.forEach((c) => {
+          const key = c.label || c.key;
+          item[key] = getExportCellValue(row, c);
+        });
+        return item;
+      });
+      const jsonString = JSON.stringify(exportJson, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8;' });
+      triggerDownload(blob, `${fileNameBase}.json`);
+      return;
+    }
+
+    // 4. Print / PDF
+    if (format === 'print') {
+      const escapeXml = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+      const printWindow = window.open('', '_blank', 'width=1000,height=800');
+      if (printWindow) {
+        const printHeaders = visibleColumns.map((c) => `<th style="border: 1px solid #CBD5E1; padding: 8px 12px; text-align: left; background: #F8FAFC; font-weight: 700; font-size: 11px;">${escapeXml(c.label || (c as any).header || c.key)}</th>`).join('');
+        const printRows = rowsData.map((row) =>
+          `<tr>${visibleColumns.map((c) => `<td style="border: 1px solid #E2E8F0; padding: 8px 12px; font-size: 11px;">${escapeXml(getExportCellValue(row, c))}</td>`).join('')}</tr>`
+        ).join('');
+        printWindow.document.write(`
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <title>${escapeXml(title || 'Records Export')}</title>
+              <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; color: #0F172A; }
+                h1 { font-size: 20px; margin: 0 0 6px 0; font-weight: 800; }
+                .meta { font-size: 12px; color: #64748B; margin-bottom: 20px; }
+                table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+                @media print {
+                  @page { margin: 10mm; }
+                  body { padding: 0; }
+                }
+              </style>
+            </head>
+            <body>
+              <h1>${escapeXml(title || 'Records Export')}</h1>
+              <div class="meta">Exported on ${new Date().toLocaleString()} · ${count} records</div>
+              <table>
+                <thead><tr>${printHeaders}</tr></thead>
+                <tbody>${printRows}</tbody>
+              </table>
+            </body>
+          </html>
+        `);
+        printWindow.document.close();
+        printWindow.focus();
+        setTimeout(() => {
+          printWindow.print();
+        }, 300);
+      } else {
+        window.print();
+      }
+      return;
+    }
+  }, [onExport, onExportCsv, processedContent, exportFilename, title, visibleColumns, getExportCellValue, triggerDownload]);
 
   // Active filter count
   const activeFiltersCount = Object.keys(effectiveFilters).filter((k) => effectiveFilters[k] !== '' && effectiveFilters[k] !== null && effectiveFilters[k] !== undefined).length;
@@ -536,7 +728,7 @@ export function DynamicTable<T = any>({
     });
   };
 
-  // Render cell content based on ColumnDef (Claude Records Hub Reference Styling)
+  // Render cell content dynamically based on column.type from backend schema
   const renderCellContent = (row: T, column: ColumnDef<T>): React.ReactNode => {
     if (typeof (column as any).render === 'function') {
       const cellVal = typeof (column as any).accessor === 'function'
@@ -545,45 +737,28 @@ export function DynamicTable<T = any>({
       return (column as any).render(cellVal, row);
     }
 
-    const val = typeof (column as any).accessor === 'function'
-      ? (column as any).accessor(row)
-      : (row as Record<string, unknown>)[column.key];
-    const type = String(column.type || '').toLowerCase();
-    const keyLower = String(column.key || '').toLowerCase();
+    const val = getCellValue(row, column);
+    const type = String(column.type || 'text').toLowerCase();
 
     if (val === null || val === undefined || val === '') {
       return <span style={{ color: '#94A3B8' }}>—</span>;
     }
 
-    // 1. Order Code & Date Stacking
-    if (keyLower === 'code' || keyLower === 'order' || keyLower === 'orderno' || keyLower === 'orderid') {
+    // 1. Code / Identifier with optional stacked timestamp
+    if (type === 'code') {
       const dateVal = (row as any).createdAtFormatted || (row as any).createdAt;
-      let formattedDate = '';
-      if (dateVal) {
-        if (typeof dateVal === 'string' && (dateVal.includes('T') || dateVal.includes('-'))) {
-          const d = new Date(dateVal);
-          if (!isNaN(d.getTime())) {
-            formattedDate = d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-          } else {
-            formattedDate = String(dateVal);
-          }
-        } else {
-          formattedDate = String(dateVal);
-        }
-      }
-
       return (
         <div>
           <div style={{ fontWeight: 800, fontSize: '0.84rem', color: '#0F172A', letterSpacing: '-0.01em' }}>{String(val)}</div>
-          {formattedDate && (
-            <div style={{ fontSize: '0.72rem', color: '#64748B', marginTop: 2 }}>{formattedDate}</div>
+          {dateVal && (
+            <div style={{ fontSize: '0.72rem', color: '#64748B', marginTop: 2 }}>{String(dateVal)}</div>
           )}
         </div>
       );
     }
 
-    // 2. Customer Avatar Initial Circle + Bold Name
-    if (keyLower === 'customer' || keyLower === 'customername' || type === 'avatar') {
+    // 2. Avatar with initial circle
+    if (type === 'avatar') {
       const initial = (row as any).customerInitial || (String(val)[0] ? String(val)[0].toUpperCase() : 'C');
       return (
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
@@ -610,8 +785,8 @@ export function DynamicTable<T = any>({
       );
     }
 
-    // 3. Stage Pill with Progression Dots
-    if (keyLower === 'stage' || keyLower === 'stagename' || keyLower === 'stagecode' || type === 'stage') {
+    // 3. Stage Pill with progression dots
+    if (type === 'stage') {
       const badgeStyle = getBadgeStyle(String(val));
       const stepIdx = Number((row as any).stepIndex || 1);
       const totalSteps = Number((row as any).totalSteps || 6);
@@ -634,29 +809,41 @@ export function DynamicTable<T = any>({
           >
             {String(val).replace(/_/g, ' ')}
           </span>
-          <div style={{ display: 'flex', gap: 4, alignItems: 'center', paddingLeft: 2 }}>
-            {Array.from({ length: totalSteps }).map((_, idx) => (
-              <div
-                key={idx}
-                style={{
-                  width: 5,
-                  height: 5,
-                  borderRadius: '50%',
-                  backgroundColor: idx + 1 <= stepIdx ? badgeStyle.text : '#E2DACF',
-                }}
-              />
-            ))}
-          </div>
+          {totalSteps > 1 && (
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center', paddingLeft: 2 }}>
+              {Array.from({ length: totalSteps }).map((_, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    width: 5,
+                    height: 5,
+                    borderRadius: '50%',
+                    backgroundColor: idx + 1 <= stepIdx ? badgeStyle.text : '#E2DACF',
+                  }}
+                />
+              ))}
+            </div>
+          )}
         </div>
       );
     }
 
-    // 4. Payment Pill Badge (PAID / PENDING / REFUND)
-    if (keyLower.includes('payment') || type === 'payment') {
+    // 4. SLA Indicator
+    if (type === 'sla') {
+      const isLate = Boolean((row as any).slaBreached || String(val).toLowerCase().includes('late'));
+      return (
+        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: isLate ? '#DC2626' : '#475569' }}>
+          {String(val)}
+        </span>
+      );
+    }
+
+    // 5. Badge (Generic & Status)
+    if (type === 'badge') {
       const s = String(val || '').toUpperCase();
-      const isPaid = s === 'PAID' || s === 'SUCCESS';
+      const isPaid = s === 'PAID' || s === 'SUCCESS' || s === 'ACTIVE';
       const isPending = s === 'PENDING';
-      const isRefund = s === 'REFUND' || s === 'FAILED';
+      const isRefund = s === 'REFUND' || s === 'FAILED' || s === 'CANCELLED';
       const bg = isPaid ? '#D1FAE5' : isPending ? '#FEF3C7' : isRefund ? '#FEE2E2' : '#F1F5F9';
       const text = isPaid ? '#047857' : isPending ? '#B45309' : isRefund ? '#B91C1C' : '#475569';
       return (
@@ -672,47 +859,13 @@ export function DynamicTable<T = any>({
             textTransform: 'uppercase',
           }}
         >
-          {val}
-        </span>
-      );
-    }
-
-    // 5. SLA Label
-    if (keyLower === 'sla' || keyLower.includes('slalabel')) {
-      const isLate = Boolean((row as any).slaBreached || String(val).toLowerCase().includes('late'));
-      return (
-        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: isLate ? '#DC2626' : '#475569' }}>
-          {val || '—'}
-        </span>
-      );
-    }
-
-    // 6. Generic Status / Badge
-    if (type === 'badge' || keyLower === 'status' || keyLower === 'role') {
-      const badgeStyle = getBadgeStyle(String(val));
-      return (
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            padding: '3px 9px',
-            borderRadius: 9999,
-            fontSize: '0.72rem',
-            fontWeight: 700,
-            backgroundColor: badgeStyle.bg,
-            color: badgeStyle.text,
-            border: `1px solid ${badgeStyle.border}`,
-            letterSpacing: '0.01em',
-            textTransform: 'capitalize',
-          }}
-        >
           {String(val).replace(/_/g, ' ')}
         </span>
       );
     }
 
-    // 7. Money / Total Amount
-    if (type === 'money' || keyLower.includes('amount') || keyLower.includes('price') || keyLower.includes('total')) {
+    // 6. Money / Currency
+    if (type === 'money' || type === 'currency') {
       const num = Number(val);
       const symbol = column.currency === 'USD' ? '$' : '₹';
       return (
@@ -722,8 +875,8 @@ export function DynamicTable<T = any>({
       );
     }
 
-    // 8. Date
-    if (type === 'date' || keyLower.includes('date') || keyLower.includes('at') || keyLower === 'timestamp') {
+    // 7. Date / Datetime
+    if (type === 'date' || type === 'datetime') {
       const d = new Date(val as string);
       if (!isNaN(d.getTime())) {
         return (
@@ -734,7 +887,8 @@ export function DynamicTable<T = any>({
       }
     }
 
-    if (type === 'image' || keyLower.includes('avatar') || keyLower.includes('logo')) {
+    // 8. Image
+    if (type === 'image') {
       const src = String(val);
       if (src.startsWith('http') || src.startsWith('/')) {
         return (
@@ -747,6 +901,17 @@ export function DynamicTable<T = any>({
       }
     }
 
+    // 9. Number
+    if (type === 'number') {
+      const num = Number(val);
+      return (
+        <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.82rem', fontWeight: 600, color: '#0F172A' }}>
+          {isNaN(num) ? String(val) : num.toLocaleString()}
+        </span>
+      );
+    }
+
+    // 10. Default Text
     return (
       <span style={{ fontSize: '0.82rem', color: '#1E293B', fontWeight: 500 }}>
         {String(val)}
@@ -793,6 +958,26 @@ export function DynamicTable<T = any>({
               {subtitle}
               {processedContent.length > 0 && (
                 <span> · <strong style={{ color: 'var(--color-primary, #6366F1)' }}>{processedContent.length.toLocaleString()}</strong> records</span>
+              )}
+              {exportNotice && (
+                <span
+                  style={{
+                    marginLeft: 8,
+                    padding: '2px 8px',
+                    borderRadius: 6,
+                    backgroundColor: '#EFF6FF',
+                    color: '#1D4ED8',
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    border: '1px solid #BFDBFE',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                >
+                  <span>✓</span>
+                  <span>{exportNotice}</span>
+                </span>
               )}
             </div>
           )}
@@ -961,29 +1146,192 @@ export function DynamicTable<T = any>({
             </button>
           )}
 
-          {/* Export Action */}
+          {/* Multi-Format Export Action (CSV, Excel, JSON, Print/PDF) */}
           {normalizedData.enableExport !== false && (
-            <button
-              type="button"
-              onClick={handleExport}
-              title="Export Records CSV"
-              style={{
-                padding: '6px 12px',
-                borderRadius: 10,
-                border: '1px solid var(--border-subtle, #E2E8F0)',
-                background: 'var(--surface-card, #FFFFFF)',
-                fontSize: '0.78rem',
-                fontWeight: 700,
-                color: '#475569',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5,
-              }}
-            >
-              <span>⭳</span>
-              <span>Export</span>
-            </button>
+            <div style={{ position: 'relative' }} ref={exportMenuRef}>
+              <button
+                type="button"
+                onClick={() => setExportMenuOpen((prev) => !prev)}
+                title="Export Records (CSV, Excel, JSON, Print/PDF)"
+                aria-expanded={exportMenuOpen}
+                aria-haspopup="true"
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 10,
+                  border: `1px solid ${exportMenuOpen ? 'var(--color-primary, #6366F1)' : 'var(--border-subtle, #E2E8F0)'}`,
+                  background: exportMenuOpen ? 'rgba(99, 102, 241, 0.08)' : 'var(--surface-card, #FFFFFF)',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  color: exportMenuOpen ? 'var(--color-primary, #6366F1)' : '#475569',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <span>⭳</span>
+                <span>Export</span>
+                <span
+                  style={{
+                    fontSize: '0.62rem',
+                    transition: 'transform 0.15s ease',
+                    transform: exportMenuOpen ? 'rotate(180deg)' : 'none',
+                    display: 'inline-block',
+                  }}
+                >
+                  ▼
+                </span>
+              </button>
+
+              {exportMenuOpen && (
+                <div
+                  className="sdui-dt-export-menu"
+                  style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 6px)',
+                    right: 0,
+                    width: 210,
+                    background: '#FFFFFF',
+                    borderRadius: 12,
+                    border: '1px solid #E2E8F0',
+                    boxShadow: '0 10px 25px -5px rgba(15, 23, 42, 0.12), 0 8px 10px -6px rgba(15, 23, 42, 0.08)',
+                    zIndex: 1050,
+                    padding: 6,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 3,
+                  }}
+                >
+                  {exportFormats.includes('csv') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExportMenuOpen(false);
+                        handleExport('csv');
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        width: '100%',
+                        transition: 'background-color 0.15s',
+                      }}
+                      onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = '#F8FAFC')}
+                      onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')}
+                    >
+                      <span style={{ fontSize: '1.1rem' }}>📄</span>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: '0.8rem', color: '#0F172A' }}>Export as CSV</div>
+                        <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Comma-separated (.csv)</div>
+                      </div>
+                    </button>
+                  )}
+
+                  {exportFormats.includes('excel') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExportMenuOpen(false);
+                        handleExport('excel');
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        width: '100%',
+                        transition: 'background-color 0.15s',
+                      }}
+                      onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = '#F8FAFC')}
+                      onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')}
+                    >
+                      <span style={{ fontSize: '1.1rem' }}>📊</span>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: '0.8rem', color: '#0F172A' }}>Export as Excel</div>
+                        <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Microsoft Excel (.xls)</div>
+                      </div>
+                    </button>
+                  )}
+
+                  {exportFormats.includes('json') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExportMenuOpen(false);
+                        handleExport('json');
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        width: '100%',
+                        transition: 'background-color 0.15s',
+                      }}
+                      onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = '#F8FAFC')}
+                      onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')}
+                    >
+                      <span style={{ fontSize: '1.1rem' }}>📦</span>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: '0.8rem', color: '#0F172A' }}>Export as JSON</div>
+                        <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Raw data (.json)</div>
+                      </div>
+                    </button>
+                  )}
+
+                  {exportFormats.includes('print') && (
+                    <>
+                      <div style={{ height: 1, backgroundColor: '#E2E8F0', margin: '3px 0' }} />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExportMenuOpen(false);
+                          handleExport('print');
+                        }}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          padding: '8px 10px',
+                          borderRadius: 8,
+                          border: 'none',
+                          background: 'transparent',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                          width: '100%',
+                          transition: 'background-color 0.15s',
+                        }}
+                        onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = '#F8FAFC')}
+                        onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')}
+                      >
+                        <span style={{ fontSize: '1.1rem' }}>🖨️</span>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: '0.8rem', color: '#0F172A' }}>Print / PDF</div>
+                          <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Formatted print view</div>
+                        </div>
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
           )}
 
           {/* Filters & Columns Drawer Button */}
