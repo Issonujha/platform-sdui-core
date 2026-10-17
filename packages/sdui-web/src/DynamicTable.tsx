@@ -235,6 +235,24 @@ export function DynamicTable<T = any>({
   const effectiveFilters = useMemo(() => {
     return activeFilters !== undefined ? activeFilters : internalFilters;
   }, [activeFilters, internalFilters]);
+
+  // Sorting state (client-side + parent notification)
+  const [internalSortBy, setInternalSortBy] = useState<string | undefined>(normalizedData.sortBy);
+  const [internalSortDir, setInternalSortDir] = useState<'asc' | 'desc'>((normalizedData.sortDir as 'asc' | 'desc') || 'asc');
+
+  const activeSortBy = internalSortBy !== undefined ? internalSortBy : normalizedData.sortBy;
+  const activeSortDir = internalSortDir || (normalizedData.sortDir as 'asc' | 'desc') || 'asc';
+
+  const handleSort = (columnKey: string) => {
+    let nextDir: 'asc' | 'desc' = 'asc';
+    if (activeSortBy === columnKey) {
+      nextDir = activeSortDir === 'asc' ? 'desc' : 'asc';
+    }
+    setInternalSortBy(columnKey);
+    setInternalSortDir(nextDir);
+    onSortChange?.(columnKey, nextDir);
+  };
+
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
   const [expandedRows, setExpandedRows] = useState<Set<any>>(() => new Set());
 
@@ -336,6 +354,79 @@ export function DynamicTable<T = any>({
     );
   }, [customFilters, normalizedData.filters, userRoles]);
 
+  // Processed Content with client-side Search, Filtering, and Sorting
+  const processedContent = useMemo(() => {
+    let list = Array.isArray(normalizedData.content) ? [...normalizedData.content] : [];
+
+    // 1. Search Filter (matches search against row properties)
+    if (activeSearch && activeSearch.trim()) {
+      const q = activeSearch.trim().toLowerCase();
+      list = list.filter((row: any) => {
+        if (!row || typeof row !== 'object') return false;
+        return Object.entries(row).some(([k, val]) => {
+          if (val === null || val === undefined) return false;
+          if (typeof val === 'object') {
+            try {
+              return JSON.stringify(val).toLowerCase().includes(q);
+            } catch {
+              return false;
+            }
+          }
+          return String(val).toLowerCase().includes(q);
+        });
+      });
+    }
+
+    // 2. Filter Drawer / effectiveFilters
+    const activeFilterEntries = Object.entries(effectiveFilters).filter(
+      ([_, v]) => v !== undefined && v !== null && v !== '' && v !== 'ALL' && v !== 'all'
+    );
+    if (activeFilterEntries.length > 0) {
+      list = list.filter((row: any) => {
+        return activeFilterEntries.every(([filterKey, filterVal]) => {
+          const rowVal = row[filterKey] ?? row[filterKey.toLowerCase()];
+          if (rowVal === undefined || rowVal === null) return false;
+          if (Array.isArray(filterVal)) {
+            return filterVal.includes(rowVal);
+          }
+          return String(rowVal).toLowerCase() === String(filterVal).toLowerCase();
+        });
+      });
+    }
+
+    // 3. Sorting
+    if (activeSortBy) {
+      const col = columns.find((c) => c.key === activeSortBy);
+      list.sort((a: any, b: any) => {
+        let valA = typeof (col as any)?.accessor === 'function' ? (col as any).accessor(a) : a[activeSortBy];
+        let valB = typeof (col as any)?.accessor === 'function' ? (col as any).accessor(b) : b[activeSortBy];
+
+        if (valA === valB) return 0;
+        if (valA === null || valA === undefined) return 1;
+        if (valB === null || valB === undefined) return -1;
+
+        if (typeof valA === 'number' && typeof valB === 'number') {
+          return activeSortDir === 'desc' ? valB - valA : valA - valB;
+        }
+
+        if (col?.type === 'date' || (typeof valA === 'string' && valA.match(/^\d{4}-\d{2}-\d{2}/))) {
+          const timeA = new Date(valA).getTime();
+          const timeB = new Date(valB).getTime();
+          if (!isNaN(timeA) && !isNaN(timeB)) {
+            return activeSortDir === 'desc' ? timeB - timeA : timeA - timeB;
+          }
+        }
+
+        const strA = String(valA).toLowerCase();
+        const strB = String(valB).toLowerCase();
+        const comp = strA.localeCompare(strB, undefined, { numeric: true, sensitivity: 'base' });
+        return activeSortDir === 'desc' ? -comp : comp;
+      });
+    }
+
+    return list;
+  }, [normalizedData.content, activeSearch, effectiveFilters, activeSortBy, activeSortDir, columns]);
+
   // Dynamic Kanban Stages
   const kanbanStages: KanbanStageDef[] = useMemo(() => {
     if (explicitKanbanStages && explicitKanbanStages.length > 0) {
@@ -410,9 +501,9 @@ export function DynamicTable<T = any>({
       onExportCsv();
       return;
     }
-    if (!normalizedData.content || normalizedData.content.length === 0) return;
+    if (!processedContent || processedContent.length === 0) return;
     const headers = visibleColumns.map((c) => c.label || (c as any).header || c.key);
-    const rows = normalizedData.content.map((row) =>
+    const rows = processedContent.map((row) =>
       visibleColumns.map((c) => {
         const v = typeof (c as any).accessor === 'function'
           ? (c as any).accessor(row)
@@ -445,7 +536,7 @@ export function DynamicTable<T = any>({
     });
   };
 
-  // Render cell content based on ColumnDef
+  // Render cell content based on ColumnDef (Claude Records Hub Reference Styling)
   const renderCellContent = (row: T, column: ColumnDef<T>): React.ReactNode => {
     if (typeof (column as any).render === 'function') {
       const cellVal = typeof (column as any).accessor === 'function'
@@ -464,7 +555,140 @@ export function DynamicTable<T = any>({
       return <span style={{ color: '#94A3B8' }}>—</span>;
     }
 
-    if (type === 'badge' || keyLower === 'status' || keyLower === 'role' || keyLower.includes('stage')) {
+    // 1. Order Code & Date Stacking
+    if (keyLower === 'code' || keyLower === 'order' || keyLower === 'orderno' || keyLower === 'orderid') {
+      const dateVal = (row as any).createdAtFormatted || (row as any).createdAt;
+      let formattedDate = '';
+      if (dateVal) {
+        if (typeof dateVal === 'string' && (dateVal.includes('T') || dateVal.includes('-'))) {
+          const d = new Date(dateVal);
+          if (!isNaN(d.getTime())) {
+            formattedDate = d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+          } else {
+            formattedDate = String(dateVal);
+          }
+        } else {
+          formattedDate = String(dateVal);
+        }
+      }
+
+      return (
+        <div>
+          <div style={{ fontWeight: 800, fontSize: '0.84rem', color: '#0F172A', letterSpacing: '-0.01em' }}>{String(val)}</div>
+          {formattedDate && (
+            <div style={{ fontSize: '0.72rem', color: '#64748B', marginTop: 2 }}>{formattedDate}</div>
+          )}
+        </div>
+      );
+    }
+
+    // 2. Customer Avatar Initial Circle + Bold Name
+    if (keyLower === 'customer' || keyLower === 'customername' || type === 'avatar') {
+      const initial = (row as any).customerInitial || (String(val)[0] ? String(val)[0].toUpperCase() : 'C');
+      return (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <div
+            style={{
+              width: 26,
+              height: 26,
+              borderRadius: '50%',
+              backgroundColor: '#F1EFEA',
+              color: '#574F47',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '0.72rem',
+              fontWeight: 800,
+              border: '1px solid #DCD4C8',
+              flexShrink: 0,
+            }}
+          >
+            {initial}
+          </div>
+          <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#0F172A' }}>{String(val)}</span>
+        </div>
+      );
+    }
+
+    // 3. Stage Pill with Progression Dots
+    if (keyLower === 'stage' || keyLower === 'stagename' || keyLower === 'stagecode' || type === 'stage') {
+      const badgeStyle = getBadgeStyle(String(val));
+      const stepIdx = Number((row as any).stepIndex || 1);
+      const totalSteps = Number((row as any).totalSteps || 6);
+
+      return (
+        <div style={{ display: 'inline-flex', flexDirection: 'column', gap: 4 }}>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              padding: '3px 10px',
+              borderRadius: 9999,
+              fontSize: '0.74rem',
+              fontWeight: 800,
+              backgroundColor: badgeStyle.bg,
+              color: badgeStyle.text,
+              border: `1px solid ${badgeStyle.border}`,
+              width: 'fit-content',
+            }}
+          >
+            {String(val).replace(/_/g, ' ')}
+          </span>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center', paddingLeft: 2 }}>
+            {Array.from({ length: totalSteps }).map((_, idx) => (
+              <div
+                key={idx}
+                style={{
+                  width: 5,
+                  height: 5,
+                  borderRadius: '50%',
+                  backgroundColor: idx + 1 <= stepIdx ? badgeStyle.text : '#E2DACF',
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // 4. Payment Pill Badge (PAID / PENDING / REFUND)
+    if (keyLower.includes('payment') || type === 'payment') {
+      const s = String(val || '').toUpperCase();
+      const isPaid = s === 'PAID' || s === 'SUCCESS';
+      const isPending = s === 'PENDING';
+      const isRefund = s === 'REFUND' || s === 'FAILED';
+      const bg = isPaid ? '#D1FAE5' : isPending ? '#FEF3C7' : isRefund ? '#FEE2E2' : '#F1F5F9';
+      const text = isPaid ? '#047857' : isPending ? '#B45309' : isRefund ? '#B91C1C' : '#475569';
+      return (
+        <span
+          style={{
+            display: 'inline-block',
+            padding: '2px 8px',
+            borderRadius: 9999,
+            fontSize: '0.7rem',
+            fontWeight: 800,
+            backgroundColor: bg,
+            color: text,
+            textTransform: 'uppercase',
+          }}
+        >
+          {val}
+        </span>
+      );
+    }
+
+    // 5. SLA Label
+    if (keyLower === 'sla' || keyLower.includes('slalabel')) {
+      const isLate = Boolean((row as any).slaBreached || String(val).toLowerCase().includes('late'));
+      return (
+        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: isLate ? '#DC2626' : '#475569' }}>
+          {val || '—'}
+        </span>
+      );
+    }
+
+    // 6. Generic Status / Badge
+    if (type === 'badge' || keyLower === 'status' || keyLower === 'role') {
       const badgeStyle = getBadgeStyle(String(val));
       return (
         <span
@@ -487,16 +711,18 @@ export function DynamicTable<T = any>({
       );
     }
 
+    // 7. Money / Total Amount
     if (type === 'money' || keyLower.includes('amount') || keyLower.includes('price') || keyLower.includes('total')) {
       const num = Number(val);
       const symbol = column.currency === 'USD' ? '$' : '₹';
       return (
-        <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, monospace', fontWeight: 800, color: '#0F172A' }}>
-          {symbol}{isNaN(num) ? String(val) : num.toLocaleString('en-IN')}
+        <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, monospace', fontWeight: 800, fontSize: '0.88rem', color: '#0F172A' }}>
+          {symbol}{isNaN(num) ? String(val) : Math.round(num).toLocaleString('en-IN')}
         </span>
       );
     }
 
+    // 8. Date
     if (type === 'date' || keyLower.includes('date') || keyLower.includes('at') || keyLower === 'timestamp') {
       const d = new Date(val as string);
       if (!isNaN(d.getTime())) {
@@ -565,8 +791,8 @@ export function DynamicTable<T = any>({
           {subtitle && (
             <div style={{ marginTop: 3, fontSize: '0.78rem', color: 'var(--text-muted, #64748B)', fontWeight: 500 }}>
               {subtitle}
-              {normalizedData.totalElements > 0 && (
-                <span> · <strong style={{ color: 'var(--color-primary, #6366F1)' }}>{normalizedData.totalElements.toLocaleString()}</strong> records</span>
+              {processedContent.length > 0 && (
+                <span> · <strong style={{ color: 'var(--color-primary, #6366F1)' }}>{processedContent.length.toLocaleString()}</strong> records</span>
               )}
             </div>
           )}
@@ -1101,8 +1327,8 @@ export function DynamicTable<T = any>({
             <thead>
               <tr style={{ background: 'var(--surface-subtle, #F8FAFC)', borderBottom: '1px solid var(--border-subtle, #E2E8F0)' }}>
                 {visibleColumns.map((col) => {
-                  const isSorted = normalizedData.sortBy === col.key;
-                  const sortDir = normalizedData.sortDir?.toLowerCase();
+                  const isSorted = activeSortBy === col.key;
+                  const sortDir = activeSortDir?.toLowerCase();
 
                   return (
                     <th
@@ -1119,7 +1345,7 @@ export function DynamicTable<T = any>({
                         userSelect: 'none',
                         whiteSpace: 'nowrap',
                       }}
-                      onClick={() => col.sortable !== false && onSortChange?.(col.key, sortDir === 'asc' ? 'desc' : 'asc')}
+                      onClick={() => col.sortable !== false && handleSort(col.key)}
                     >
                       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                         <span>{col.label || (col as any).header || col.key}</span>
@@ -1157,7 +1383,7 @@ export function DynamicTable<T = any>({
                     <div style={{ fontWeight: 600 }}>Loading records…</div>
                   </td>
                 </tr>
-              ) : normalizedData.content.length === 0 ? (
+              ) : processedContent.length === 0 ? (
                 <tr>
                   <td colSpan={visibleColumns.length + (actions || rowActions ? 1 : 0)} style={{ padding: 48, textAlign: 'center', color: '#64748B' }}>
                     <div style={{ fontSize: '1.4rem', marginBottom: 6 }}>📭</div>
@@ -1166,7 +1392,7 @@ export function DynamicTable<T = any>({
                   </td>
                 </tr>
               ) : (
-                normalizedData.content.map((row, idx) => {
+                processedContent.map((row, idx) => {
                   const rowId = (row as any).id ?? (row as any)._id ?? idx;
 
                   return (
@@ -1251,7 +1477,7 @@ export function DynamicTable<T = any>({
         >
           {kanbanStages.map((stage) => {
             const isColOver = dragOverCol === stage.key;
-            const stageRecords = normalizedData.content.filter((item) => {
+            const stageRecords = processedContent.filter((item) => {
               const itemStage = getRowStage(item, stageKey);
               if (stage.statuses && stage.statuses.length > 0) {
                 return stage.statuses.includes(itemStage) || itemStage === stage.key;
@@ -1503,14 +1729,14 @@ export function DynamicTable<T = any>({
             <div style={{ gridColumn: '1 / -1', padding: 48, textAlign: 'center', color: '#64748B' }}>
               Loading cards…
             </div>
-          ) : normalizedData.content.length === 0 ? (
+          ) : processedContent.length === 0 ? (
             <div style={{ gridColumn: '1 / -1', padding: 48, textAlign: 'center', color: '#64748B' }}>
               <div style={{ fontSize: '1.4rem', marginBottom: 6 }}>📭</div>
               <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 2 }}>{emptyMessage || 'No records found'}</div>
               <div style={{ fontSize: '0.76rem' }}>Try clearing filters or search terms</div>
             </div>
           ) : (
-            normalizedData.content.map((item, idx) => {
+            processedContent.map((item, idx) => {
               const currentStage = getRowStage(item, stageKey);
               const allowedNext: StageTransitionOption[] = (item as any).allowedNextTransitions || [];
 
@@ -1687,8 +1913,8 @@ export function DynamicTable<T = any>({
             ))}
           </select>
           <span>
-            {normalizedData.totalElements > 0
-              ? `${normalizedData.pageNumber * normalizedData.pageSize + 1}–${Math.min((normalizedData.pageNumber + 1) * normalizedData.pageSize, normalizedData.totalElements)} of ${normalizedData.totalElements}`
+            {processedContent.length > 0
+              ? `${normalizedData.pageNumber * normalizedData.pageSize + 1}–${Math.min((normalizedData.pageNumber + 1) * normalizedData.pageSize, processedContent.length)} of ${processedContent.length}`
               : '0 records'}
           </span>
         </div>
