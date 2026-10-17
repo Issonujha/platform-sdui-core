@@ -19,7 +19,7 @@
     <description>Server-Side UI commons: metadata-driven table contracts, hierarchy and reorder engines.</description>
 
     <properties>
-        <revision>0.1.6</revision>
+        <revision>0.1.7</revision>
         <java.version>17</java.version>
         <maven.compiler.release>17</maven.compiler.release>
     </properties>

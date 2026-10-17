@@ -7,6 +7,23 @@ import type {
   KanbanStageDef,
   StageTransitionOption,
 } from '@issonujha/sdui-core';
+export interface RowActionHelpers {
+  isExpanded: boolean;
+  toggleExpand: () => void;
+  openDetail?: () => void;
+}
+
+export interface TableActionItem {
+  id?: string;
+  label: string;
+  variant?: 'contained' | 'outlined' | 'text' | string;
+  color?: string;
+  icon?: React.ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+  sx?: any;
+  style?: React.CSSProperties;
+}
 
 export interface DynamicTableProps<T = any> {
   data: DataTableResponse<T> | T[];
@@ -37,13 +54,13 @@ export interface DynamicTableProps<T = any> {
   pageSizeOptions?: number[];
   defaultRowsPerPage?: number;
   renderCustomCard?: (row: T, onTransition?: (targetStageKey: string) => void) => React.ReactNode;
-  actions?: (row: T) => React.ReactNode;
-  rowActions?: (row: T) => React.ReactNode;
-  renderExpandedRow?: (row: T) => React.ReactNode;
+  actions?: ((row: T, helpers: RowActionHelpers) => React.ReactNode) | ((row: T) => React.ReactNode) | React.ReactNode;
+  rowActions?: ((row: T, helpers: RowActionHelpers) => React.ReactNode) | ((row: T) => React.ReactNode) | any[] | React.ReactNode;
+  renderExpandedRow?: (row: T, helpers: RowActionHelpers) => React.ReactNode;
   activeFilters?: Record<string, unknown>;
   emptyMessage?: string;
   exportFilename?: string;
-  tableActions?: React.ReactNode;
+  tableActions?: React.ReactNode | TableActionItem[];
   extraHeaderActions?: React.ReactNode;
   compact?: boolean;
   enableExport?: boolean;
@@ -219,6 +236,70 @@ export function DynamicTable<T = any>({
     return activeFilters !== undefined ? activeFilters : internalFilters;
   }, [activeFilters, internalFilters]);
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+  const [expandedRows, setExpandedRows] = useState<Set<any>>(() => new Set());
+
+  const toggleRowExpansion = useCallback((rowId: any) => {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  }, []);
+
+  const renderActionContent = useCallback((row: T, rowId: any) => {
+    const isExpanded = expandedRows.has(rowId);
+    const toggleExpand = () => toggleRowExpansion(rowId);
+    const helpers: RowActionHelpers = { isExpanded, toggleExpand };
+
+    const actionFn = actions || rowActions;
+    if (typeof actionFn === 'function') {
+      try {
+        return (actionFn as any)(row, helpers);
+      } catch (err) {
+        console.error('[DynamicTable] Error executing actions renderer:', err);
+        return null;
+      }
+    }
+    if (Array.isArray(rowActions)) {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          {(rowActions as any[]).map((ra, idx) => {
+            if (ra.isVisible && !ra.isVisible(row)) return null;
+            return (
+              <button
+                key={ra.id || ra.label || idx}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  ra.onClick?.(row);
+                }}
+                disabled={ra.disabled}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '4px 8px',
+                  borderRadius: 6,
+                  border: '1px solid #CBD5E1',
+                  backgroundColor: '#FFFFFF',
+                  color: '#334155',
+                  fontSize: '0.74rem',
+                  fontWeight: 600,
+                  cursor: ra.disabled ? 'not-allowed' : 'pointer',
+                  ...ra.style,
+                }}
+              >
+                {ra.icon && <span>{ra.icon}</span>}
+                <span>{ra.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      );
+    }
+    return (actions as React.ReactNode) || null;
+  }, [actions, rowActions, expandedRows, toggleRowExpansion]);
 
   // Columns resolution
   const columns: ColumnDef<T>[] = useMemo(() => {
@@ -716,7 +797,49 @@ export function DynamicTable<T = any>({
           </button>
 
           {extraHeaderActions}
-          {tableActions}
+          {tableActions && (
+            Array.isArray(tableActions) ? (
+              tableActions.map((act: any, idx: number) => {
+                if (React.isValidElement(act)) {
+                  return React.cloneElement(act, { key: (act as any).key || idx });
+                }
+                if (act && typeof act === 'object') {
+                  const isContained = act.variant === 'contained' || !act.variant;
+                  return (
+                    <button
+                      key={act.id || act.label || idx}
+                      type="button"
+                      onClick={act.onClick}
+                      disabled={act.disabled}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '6px 14px',
+                        borderRadius: 10,
+                        border: isContained ? 'none' : '1px solid var(--border-subtle, #CBD5E1)',
+                        backgroundColor: isContained ? 'var(--color-primary, #6366F1)' : 'var(--surface-card, #FFFFFF)',
+                        color: isContained ? '#FFFFFF' : '#334155',
+                        fontWeight: 700,
+                        fontSize: '0.8rem',
+                        cursor: act.disabled ? 'not-allowed' : 'pointer',
+                        opacity: act.disabled ? 0.6 : 1,
+                        transition: 'all 0.15s ease',
+                        whiteSpace: 'nowrap',
+                        ...act.style,
+                      }}
+                    >
+                      {act.icon && <span style={{ display: 'inline-flex', alignItems: 'center' }}>{act.icon}</span>}
+                      <span>{act.label}</span>
+                    </button>
+                  );
+                }
+                return null;
+              })
+            ) : (
+              tableActions
+            )
+          )}
         </div>
       </div>
 
@@ -1044,7 +1167,7 @@ export function DynamicTable<T = any>({
                 </tr>
               ) : (
                 normalizedData.content.map((row, idx) => {
-                  const rowId = (row as any).id || idx;
+                  const rowId = (row as any).id ?? (row as any)._id ?? idx;
 
                   return (
                     <React.Fragment key={rowId}>
@@ -1083,11 +1206,11 @@ export function DynamicTable<T = any>({
                             }}
                             onClick={(e) => e.stopPropagation()}
                           >
-                            {(actions || rowActions)!(row)}
+                            {renderActionContent(row, rowId)}
                           </td>
                         )}
                       </tr>
-                      {renderExpandedRow && (
+                      {renderExpandedRow && expandedRows.has(rowId) && (
                         <tr>
                           <td
                             colSpan={visibleColumns.length + (actions || rowActions ? 1 : 0)}
@@ -1097,7 +1220,10 @@ export function DynamicTable<T = any>({
                               borderBottom: '1px solid #E2E8F0',
                             }}
                           >
-                            {renderExpandedRow(row)}
+                            {renderExpandedRow(row, {
+                              isExpanded: true,
+                              toggleExpand: () => toggleRowExpansion(rowId),
+                            })}
                           </td>
                         </tr>
                       )}
@@ -1349,7 +1475,7 @@ export function DynamicTable<T = any>({
                               }}
                               onClick={(e) => e.stopPropagation()}
                             >
-                              {(actions || rowActions)!(item)}
+                              {renderActionContent(item, (item as any).id ?? i)}
                             </div>
                           )}
                         </div>
@@ -1506,7 +1632,16 @@ export function DynamicTable<T = any>({
                       }}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {(actions || rowActions)!(item)}
+                      {renderActionContent(item, (item as any).id ?? (item as any)._id ?? idx)}
+                    </div>
+                  )}
+
+                  {renderExpandedRow && expandedRows.has((item as any).id ?? (item as any)._id ?? idx) && (
+                    <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #E2E8F0' }}>
+                      {renderExpandedRow(item, {
+                        isExpanded: true,
+                        toggleExpand: () => toggleRowExpansion((item as any).id ?? (item as any)._id ?? idx),
+                      })}
                     </div>
                   )}
                 </div>
