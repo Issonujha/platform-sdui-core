@@ -132,6 +132,14 @@ function getBadgeStyle(val: string): { bg: string; text: string; border: string 
   return { bg: '#F1F5F9', text: '#334155', border: '#E2E8F0' };
 }
 
+function extractEntityDisplay(val: any): string {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'object' && !Array.isArray(val)) {
+    return val.label || val.name || val.displayName || val.title || val.username || val.email || val.code || val.id || '';
+  }
+  return String(val);
+}
+
 export function DynamicTable<T = any>({
   data: rawData,
   columns: customColumns,
@@ -242,6 +250,24 @@ export function DynamicTable<T = any>({
     return activeFilters !== undefined ? activeFilters : internalFilters;
   }, [activeFilters, internalFilters]);
 
+  // Column header filter popover state
+  const [activeHeaderFilterCol, setActiveHeaderFilterCol] = useState<string | null>(null);
+  const headerFilterPopoverRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (headerFilterPopoverRef.current && !headerFilterPopoverRef.current.contains(event.target as Node)) {
+        setActiveHeaderFilterCol(null);
+      }
+    }
+    if (activeHeaderFilterCol) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [activeHeaderFilterCol]);
+
   // Sorting state (client-side + parent notification)
   const [internalSortBy, setInternalSortBy] = useState<string | undefined>(normalizedData.sortBy);
   const [internalSortDir, setInternalSortDir] = useState<'asc' | 'desc'>((normalizedData.sortDir as 'asc' | 'desc') || 'asc');
@@ -344,6 +370,27 @@ export function DynamicTable<T = any>({
     return (actions as React.ReactNode) || null;
   }, [actions, rowActions, expandedRows, toggleRowExpansion]);
 
+  // Dynamic cell value resolver using column key, nested dot-paths (e.g. 'shop.name'), or custom accessor
+  const getCellValue = useCallback((row: any, col: ColumnDef<T>): any => {
+    if (!row || !col) return '';
+    if (typeof (col as any).accessor === 'function') {
+      try {
+        return (col as any).accessor(row);
+      } catch {
+        // fallback
+      }
+    }
+    const key = col.key;
+    if (!key) return '';
+    if (row[key] !== undefined && row[key] !== null) {
+      return row[key];
+    }
+    if (key.includes('.')) {
+      return key.split('.').reduce((acc, part) => (acc ? acc[part] : undefined), row);
+    }
+    return row[key];
+  }, []);
+
   // Columns resolution
   const columns: ColumnDef<T>[] = useMemo(() => {
     let base = customColumns && customColumns.length > 0
@@ -379,18 +426,87 @@ export function DynamicTable<T = any>({
     );
   }, [customFilters, normalizedData.filters, userRoles]);
 
-  // Processed Content with client-side Search, Filtering, and Sorting
+  // Auto-generate filters for visible filterable columns that don't have an explicit FilterDef
+  // Intelligently supports foreign keys, nested entities, and discrete options
+  const effectiveFilterDefs: FilterDef[] = useMemo(() => {
+    const result = [...filters];
+    const registeredKeys = new Set(result.map((f) => f.key || f.columnKey));
+
+    visibleColumns.forEach((col) => {
+      if (col.filterable === false) return;
+      if (registeredKeys.has(col.key)) return;
+
+      const distinct = new Set<string>();
+
+      (normalizedData.content || []).forEach((row: any) => {
+        const rawVal = getCellValue(row, col);
+        if (rawVal === undefined || rawVal === null || rawVal === '') return;
+        if (Array.isArray(rawVal)) {
+          rawVal.forEach((item) => {
+            const s = typeof item === 'object' ? extractEntityDisplay(item) : String(item);
+            if (s && s !== '[object Object]') distinct.add(s);
+          });
+        } else if (typeof rawVal === 'object') {
+          const s = extractEntityDisplay(rawVal);
+          if (s && s !== '[object Object]') distinct.add(s);
+        } else {
+          distinct.add(String(rawVal));
+        }
+      });
+
+      const uniqueCount = distinct.size;
+      const isSelect =
+        col.type === 'badge' ||
+        (uniqueCount > 0 && uniqueCount <= 20);
+
+      if (isSelect) {
+        result.push({
+          key: col.key,
+          label: col.label || (col as any).header || col.key,
+          type: 'SELECT',
+          columnKey: col.key,
+          options: Array.from(distinct)
+            .sort()
+            .map((v) => ({ label: v, value: v })),
+        });
+      } else {
+        result.push({
+          key: col.key,
+          label: col.label || (col as any).header || col.key,
+          type: 'SEARCH',
+          columnKey: col.key,
+          placeholder: `Filter ${col.label || (col as any).header || col.key}…`,
+        });
+      }
+    });
+
+    return result;
+  }, [filters, visibleColumns, normalizedData.content, getCellValue]);
+
+  // Active filter entries
+  const activeFilterEntries = useMemo(() => {
+    return Object.entries(effectiveFilters).filter(
+      ([_, v]) => v !== undefined && v !== null && v !== '' && v !== 'ALL' && v !== 'all'
+    );
+  }, [effectiveFilters]);
+
+  // Active filter count
+  const activeFiltersCount = activeFilterEntries.length;
+
+  // Processed Content with client-side Search, Multi-Column Filtering, and Sorting
   const processedContent = useMemo(() => {
     let list = Array.isArray(normalizedData.content) ? [...normalizedData.content] : [];
 
-    // 1. Search Filter (matches search against row properties)
+    // 1. Search Filter (matches search against row properties & foreign object fields)
     if (activeSearch && activeSearch.trim()) {
       const q = activeSearch.trim().toLowerCase();
       list = list.filter((row: any) => {
         if (!row || typeof row !== 'object') return false;
-        return Object.entries(row).some(([k, val]) => {
+        return Object.entries(row).some(([_, val]) => {
           if (val === null || val === undefined) return false;
           if (typeof val === 'object') {
+            const entityStr = extractEntityDisplay(val);
+            if (entityStr && entityStr.toLowerCase().includes(q)) return true;
             try {
               return JSON.stringify(val).toLowerCase().includes(q);
             } catch {
@@ -402,19 +518,55 @@ export function DynamicTable<T = any>({
       });
     }
 
-    // 2. Filter Drawer / effectiveFilters
-    const activeFilterEntries = Object.entries(effectiveFilters).filter(
-      ([_, v]) => v !== undefined && v !== null && v !== '' && v !== 'ALL' && v !== 'all'
-    );
+    // 2. Filter Drawer & Multi-Column Filters
     if (activeFilterEntries.length > 0) {
       list = list.filter((row: any) => {
         return activeFilterEntries.every(([filterKey, filterVal]) => {
-          const rowVal = row[filterKey] ?? row[filterKey.toLowerCase()];
-          if (rowVal === undefined || rowVal === null) return false;
-          if (Array.isArray(filterVal)) {
-            return filterVal.includes(rowVal);
+          const fltDef = effectiveFilterDefs.find((f) => f.key === filterKey || f.columnKey === filterKey);
+          const colDef = columns.find((c) => c.key === filterKey || (fltDef && fltDef.columnKey === c.key));
+
+          let rowVal = colDef ? getCellValue(row, colDef) : (row[filterKey] ?? row[filterKey.toLowerCase()]);
+          if (rowVal === undefined || rowVal === null) {
+            rowVal = row[filterKey] ?? row[filterKey.toLowerCase()];
           }
-          return String(rowVal).toLowerCase() === String(filterVal).toLowerCase();
+          if (rowVal === undefined || rowVal === null) return false;
+
+          const filterType = fltDef?.type || (typeof filterVal === 'string' && filterVal.length > 0 ? 'SEARCH' : 'SELECT');
+          const strFilter = String(filterVal).trim().toLowerCase();
+
+          // Array row value (e.g. roles, surfaces)
+          if (Array.isArray(rowVal)) {
+            if (Array.isArray(filterVal)) {
+              return filterVal.some((fv) => rowVal.some((rv) => {
+                const s = typeof rv === 'object' ? extractEntityDisplay(rv) : String(rv);
+                return s.toLowerCase() === String(fv).toLowerCase();
+              }));
+            }
+            return rowVal.some((rv) => {
+              const strRow = (typeof rv === 'object' ? extractEntityDisplay(rv) : String(rv)).toLowerCase();
+              return filterType === 'SEARCH' ? strRow.includes(strFilter) : strRow === strFilter;
+            });
+          }
+
+          // Array filter value
+          if (Array.isArray(filterVal)) {
+            const s = (typeof rowVal === 'object' ? extractEntityDisplay(rowVal) : String(rowVal)).toLowerCase();
+            return filterVal.some((fv) => s === String(fv).toLowerCase());
+          }
+
+          let strRow = '';
+          if (typeof rowVal === 'object') {
+            strRow = (extractEntityDisplay(rowVal) + ' ' + (rowVal.id || '') + ' ' + (rowVal.email || '') + ' ' + (rowVal.code || '')).toLowerCase();
+          } else {
+            strRow = String(rowVal).trim().toLowerCase();
+          }
+
+          if (filterType === 'SELECT') {
+            const displayStr = (typeof rowVal === 'object' ? extractEntityDisplay(rowVal) : String(rowVal)).toLowerCase();
+            return displayStr === strFilter || strRow.split(',').map((s) => s.trim().toLowerCase()).includes(strFilter);
+          }
+
+          return strRow.includes(strFilter);
         });
       });
     }
@@ -519,24 +671,6 @@ export function DynamicTable<T = any>({
     }
     setDraggedItem(null);
   };
-
-  // Dynamic cell value resolver using column key, nested dot-paths (e.g. 'shop.name'), or custom accessor
-  const getCellValue = useCallback((row: any, col: ColumnDef<T>): any => {
-    if (!row || !col) return '';
-    if (typeof (col as any).accessor === 'function') {
-      try {
-        return (col as any).accessor(row);
-      } catch {
-        // fallback
-      }
-    }
-    const key = col.key;
-    if (!key) return '';
-    if (key.includes('.')) {
-      return key.split('.').reduce((acc, part) => (acc ? acc[part] : undefined), row);
-    }
-    return row[key];
-  }, []);
 
   // Helper to extract clean display/export string from row & column dynamically
   const getExportCellValue = useCallback((row: any, col: ColumnDef<T>): string => {
@@ -714,9 +848,6 @@ export function DynamicTable<T = any>({
       return;
     }
   }, [onExport, onExportCsv, processedContent, exportFilename, title, visibleColumns, getExportCellValue, triggerDownload]);
-
-  // Active filter count
-  const activeFiltersCount = Object.keys(effectiveFilters).filter((k) => effectiveFilters[k] !== '' && effectiveFilters[k] !== null && effectiveFilters[k] !== undefined).length;
 
   // Filter drawer toggle column
   const toggleColumnVisibility = (key: string) => {
@@ -911,7 +1042,23 @@ export function DynamicTable<T = any>({
       );
     }
 
-    // 10. Default Text
+    // 10. Foreign Entity Object
+    if (typeof val === 'object' && !React.isValidElement(val)) {
+      const display = extractEntityDisplay(val);
+      const sub = (val as any).email || (val as any).phoneNumber || (val as any).sublabel || (val as any).address;
+      return (
+        <div>
+          <span style={{ fontSize: '0.82rem', color: '#1E293B', fontWeight: 600 }}>
+            {display || '—'}
+          </span>
+          {sub && sub !== display && (
+            <div style={{ fontSize: '0.7rem', color: '#64748B' }}>{sub}</div>
+          )}
+        </div>
+      );
+    }
+
+    // 11. Default Text
     return (
       <span style={{ fontSize: '0.82rem', color: '#1E293B', fontWeight: 500 }}>
         {String(val)}
@@ -1504,10 +1651,10 @@ export function DynamicTable<T = any>({
               </div>
 
               {columns
-                .filter((c) => !filterDrawerSearch || c.label.toLowerCase().includes(filterDrawerSearch.toLowerCase()))
+                .filter((c) => !filterDrawerSearch || (c.label || (c as any).header || c.key).toLowerCase().includes(filterDrawerSearch.toLowerCase()))
                 .map((col) => {
                   const isVisible = !hiddenColumns.has(col.key);
-                  const boundFilter = filters.find((f) => f.key === col.key || f.columnKey === col.key);
+                  const boundFilter = effectiveFilterDefs.find((f) => f.key === col.key || f.columnKey === col.key);
 
                   return (
                     <div
@@ -1658,6 +1805,94 @@ export function DynamicTable<T = any>({
         </div>
       )}
 
+      {/* ── 2.5 Active Filters Strip ── */}
+      {activeFilterEntries.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '8px 14px',
+            backgroundColor: 'var(--surface-subtle, #F8FAFC)',
+            borderRadius: 12,
+            border: '1px solid var(--border-subtle, #E2E8F0)',
+            flexWrap: 'wrap',
+            fontSize: '0.76rem',
+          }}
+        >
+          <span style={{ fontWeight: 800, color: '#64748B', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span>⧩</span> Active Filters:
+          </span>
+          {activeFilterEntries.map(([key, val]) => {
+            const colDef = columns.find((c) => c.key === key);
+            const fltDef = effectiveFilterDefs.find((f) => f.key === key || f.columnKey === key);
+            const label = fltDef?.label || colDef?.label || (colDef as any)?.header || key;
+            const displayVal = String(val);
+
+            return (
+              <span
+                key={key}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '3px 8px',
+                  borderRadius: 6,
+                  backgroundColor: 'rgba(99, 102, 241, 0.08)',
+                  border: '1px solid rgba(99, 102, 241, 0.25)',
+                  color: 'var(--color-primary, #6366F1)',
+                  fontWeight: 600,
+                }}
+              >
+                <span>
+                  {label}: <strong>{displayVal}</strong>
+                </span>
+                <button
+                  type="button"
+                  title={`Remove ${label} filter`}
+                  onClick={() => {
+                    const next = { ...effectiveFilters };
+                    delete next[key];
+                    setInternalFilters(next);
+                    onFilterChange?.(next);
+                  }}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    cursor: 'pointer',
+                    color: 'var(--color-primary, #6366F1)',
+                    fontWeight: 800,
+                    padding: 0,
+                    fontSize: '0.8rem',
+                    lineHeight: 1,
+                  }}
+                >
+                  ✕
+                </button>
+              </span>
+            );
+          })}
+          <button
+            type="button"
+            onClick={() => {
+              setInternalFilters({});
+              onFilterChange?.({});
+            }}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer',
+              color: '#EF4444',
+              fontWeight: 700,
+              fontSize: '0.74rem',
+              marginLeft: 'auto',
+            }}
+          >
+            Clear all filters
+          </button>
+        </div>
+      )}
+
       {/* ── 3. TABLE VIEW ── */}
       {activeView === 'table' && (
         <div
@@ -1677,32 +1912,218 @@ export function DynamicTable<T = any>({
                 {visibleColumns.map((col) => {
                   const isSorted = activeSortBy === col.key;
                   const sortDir = activeSortDir?.toLowerCase();
+                  const boundFilter = effectiveFilterDefs.find((f) => f.key === col.key || f.columnKey === col.key);
+                  const filterVal = boundFilter ? effectiveFilters[boundFilter.key] : undefined;
+                  const isFilterActive = filterVal !== undefined && filterVal !== null && filterVal !== '' && filterVal !== 'ALL' && filterVal !== 'all';
+                  const isPopoverOpen = activeHeaderFilterCol === col.key;
 
                   return (
                     <th
                       key={col.key}
                       style={{
+                        position: 'relative',
                         padding: compact ? '8px 12px' : '12px 16px',
                         fontWeight: 700,
-                        color: '#475569',
+                        color: isFilterActive ? 'var(--color-primary, #6366F1)' : '#475569',
                         fontSize: '0.74rem',
                         letterSpacing: '0.04em',
                         textTransform: 'uppercase',
                         textAlign: col.align || 'left',
-                        cursor: col.sortable !== false ? 'pointer' : 'default',
                         userSelect: 'none',
                         whiteSpace: 'nowrap',
                       }}
-                      onClick={() => col.sortable !== false && handleSort(col.key)}
                     >
-                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                        <span>{col.label || (col as any).header || col.key}</span>
-                        {col.sortable !== false && (
-                          <span style={{ fontSize: '0.7rem', color: isSorted ? 'var(--color-primary, #6366F1)' : '#CBD5E1' }}>
-                            {isSorted ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
-                          </span>
+                      <div
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          justifyContent: col.align === 'right' ? 'flex-end' : col.align === 'center' ? 'center' : 'flex-start',
+                          width: '100%',
+                        }}
+                      >
+                        <span
+                          onClick={() => col.sortable !== false && handleSort(col.key)}
+                          style={{
+                            cursor: col.sortable !== false ? 'pointer' : 'default',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                          }}
+                          title={col.sortable !== false ? `Click to sort by ${col.label || (col as any).header || col.key}` : undefined}
+                        >
+                          <span>{col.label || (col as any).header || col.key}</span>
+                          {col.sortable !== false && (
+                            <span style={{ fontSize: '0.7rem', color: isSorted ? 'var(--color-primary, #6366F1)' : '#CBD5E1' }}>
+                              {isSorted ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                            </span>
+                          )}
+                        </span>
+
+                        {/* Column Filter Icon Button */}
+                        {col.filterable !== false && boundFilter && (
+                          <button
+                            type="button"
+                            title={isFilterActive ? `Filtered by: ${filterVal} (Click to change)` : `Filter by ${col.label || col.key}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveHeaderFilterCol((prev) => (prev === col.key ? null : col.key));
+                            }}
+                            style={{
+                              border: isFilterActive ? '1px solid var(--color-primary, #6366F1)' : '1px solid #CBD5E1',
+                              background: isFilterActive ? 'rgba(99, 102, 241, 0.12)' : '#FFFFFF',
+                              color: isFilterActive ? 'var(--color-primary, #6366F1)' : '#64748B',
+                              borderRadius: 6,
+                              padding: '2px 5px',
+                              cursor: 'pointer',
+                              fontSize: '0.7rem',
+                              lineHeight: 1,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 3,
+                              transition: 'all 0.15s ease',
+                            }}
+                          >
+                            <span>⧩</span>
+                            {isFilterActive && (
+                              <span
+                                style={{
+                                  width: 6,
+                                  height: 6,
+                                  borderRadius: '50%',
+                                  backgroundColor: 'var(--color-primary, #6366F1)',
+                                }}
+                              />
+                            )}
+                          </button>
                         )}
                       </div>
+
+                      {/* Column Header Floating Filter Dropdown */}
+                      {isPopoverOpen && boundFilter && (
+                        <div
+                          ref={headerFilterPopoverRef}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            position: 'absolute',
+                            top: 'calc(100% + 4px)',
+                            left: col.align === 'right' ? 'auto' : 8,
+                            right: col.align === 'right' ? 8 : 'auto',
+                            minWidth: 220,
+                            backgroundColor: '#FFFFFF',
+                            borderRadius: 12,
+                            padding: '12px 14px',
+                            boxShadow: '0 10px 25px -5px rgba(15, 23, 42, 0.18), 0 8px 10px -6px rgba(15, 23, 42, 0.12)',
+                            border: '1px solid #CBD5E1',
+                            zIndex: 1100,
+                            textTransform: 'none',
+                            fontWeight: 'normal',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                            <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#0F172A' }}>
+                              Filter {col.label || (col as any).header || col.key}
+                            </span>
+                            {isFilterActive && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = { ...effectiveFilters };
+                                  delete next[boundFilter.key];
+                                  setInternalFilters(next);
+                                  onFilterChange?.(next);
+                                  setActiveHeaderFilterCol(null);
+                                }}
+                                style={{
+                                  border: 'none',
+                                  background: 'transparent',
+                                  color: '#EF4444',
+                                  fontSize: '0.7rem',
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  padding: 0,
+                                }}
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </div>
+
+                          {boundFilter.type === 'SELECT' ? (
+                            <select
+                              autoFocus
+                              value={String(effectiveFilters[boundFilter.key] || '')}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                const next = { ...effectiveFilters, [boundFilter.key]: val };
+                                if (!val || val === 'ALL' || val === 'all') delete next[boundFilter.key];
+                                setInternalFilters(next);
+                                onFilterChange?.(next);
+                              }}
+                              style={{
+                                width: '100%',
+                                padding: '7px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #CBD5E1',
+                                fontSize: '0.8rem',
+                                color: '#0F172A',
+                                backgroundColor: '#FFFFFF',
+                                outline: 'none',
+                                boxSizing: 'border-box',
+                              }}
+                            >
+                              <option value="">All ({col.label || (col as any).header || col.key})</option>
+                              {(boundFilter.options || []).map((opt) => (
+                                <option key={String(opt.value)} value={String(opt.value)}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              autoFocus
+                              type="text"
+                              placeholder={boundFilter.placeholder || `Filter by ${col.label || col.key}…`}
+                              value={String(effectiveFilters[boundFilter.key] || '')}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                const next = { ...effectiveFilters, [boundFilter.key]: val };
+                                if (!val) delete next[boundFilter.key];
+                                setInternalFilters(next);
+                                onFilterChange?.(next);
+                              }}
+                              style={{
+                                width: '100%',
+                                padding: '7px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #CBD5E1',
+                                fontSize: '0.8rem',
+                                outline: 'none',
+                                boxSizing: 'border-box',
+                              }}
+                            />
+                          )}
+
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10, gap: 6 }}>
+                            <button
+                              type="button"
+                              onClick={() => setActiveHeaderFilterCol(null)}
+                              style={{
+                                padding: '4px 12px',
+                                borderRadius: 6,
+                                border: 'none',
+                                backgroundColor: 'var(--color-primary, #6366F1)',
+                                color: '#FFFFFF',
+                                fontSize: '0.72rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Done
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </th>
                   );
                 })}
